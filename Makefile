@@ -12,7 +12,7 @@ PORT    ?= 8080
 MOCK_PORT ?= 8081
 
 .DEFAULT_GOAL := help
-.PHONY: help venv dev mock test test-fast test-stages test-graded golden gate stats clean
+.PHONY: help venv dev mock test test-fast test-stages test-graded homework golden demo gate stats clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -33,19 +33,25 @@ mock: ## Run the Anthropic-dialect mock on $(HOST):$(MOCK_PORT)   [stage 2]
 	$(PY) -m uvicorn mock.server:app --host $(HOST) --port $(MOCK_PORT) $(ENV_FILE)
 
 test-fast: ## The inner loop: no chaos, no timing tests. Run this while working.
-	FAULT_RATE=0.0 $(PYTEST) -m "not chaos and not latency"
+	FAULT_RATE=0.0 $(PYTEST) -m "not chaos and not latency" --ignore=tests/homework
 
 test-stages: ## Only the participant-facing tests (tests/stages/)
 	$(PYTEST) tests/stages
 
 test: ## The full suite at the gate's chaos level. This decides if a stage is done.
-	FAULT_RATE=0.4 TEMPERATURE=0.7 $(PYTEST)
+	FAULT_RATE=0.4 TEMPERATURE=0.7 $(PYTEST) --ignore=tests/homework
 
 test-graded: ## The full suite with the mock refusing per-request fault headers
-	MOCK_ALLOW_HEADER_OVERRIDE=false FAULT_RATE=0.4 TEMPERATURE=0.7 $(PYTEST)
+	MOCK_ALLOW_HEADER_OVERRIDE=false FAULT_RATE=0.4 TEMPERATURE=0.7 $(PYTEST) --ignore=tests/homework
+
+homework: ## The homework tasks only (HOMEWORK.md)
+	FAULT_RATE=0.4 TEMPERATURE=0.7 $(PYTEST) tests/homework
 
 golden: ## Score the golden set across seeds (stage 4). SEEDS=20 MODE=clean|bad_content
 	$(PY) scripts/score_golden.py --seeds $(or $(SEEDS),20) --mode $(or $(MODE),clean)
+
+demo: ## Demo scenario for the recorded session: make demo S=chaos (no S lists them)
+	$(PY) scripts/demo.py $(S)
 
 gate: ## Ten consecutive green runs at FAULT_RATE=0.4 + the graded run
 	bash scripts/check_suite_stable.sh 10
