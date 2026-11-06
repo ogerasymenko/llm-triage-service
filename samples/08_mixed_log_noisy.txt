@@ -1,0 +1,11 @@
+weird thing happening
+
+so basically the thing broke again?? randomly. was fine yesterday
+
+[2026-08-14 11:02:41] INFO  worker started
+[2026-08-14 11:02:44] WARN  connection pool at 90%
+[2026-08-14 11:02:51] ERROR psycopg2.OperationalError: could not connect
+[2026-08-14 11:02:52] INFO  retrying
+[2026-08-14 11:03:19] ERROR psycopg2.OperationalError: could not connect
+
+maybe related to the deploy? or not. someone said postgres was fine. idk

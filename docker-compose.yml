@@ -1,0 +1,42 @@
+# Verified with Docker 29.6.1 / Compose v5.3.0 (aarch64): both images build,
+# all three services come up, and GET :8080/health answers 200 from the host
+# while every stub is still in place.
+#
+# The container-to-container path is verified too, not just the published
+# ports -- those would keep working even if service-name resolution were
+# broken, and anyone editing this file would find out the hard way. From
+# inside the api container: mock and redis resolve by name, the real anthropic
+# SDK reaches the mock at http://mock:8081 and gets a valid TriageResult back
+# (the mock's /stats records the call), and redis answers PING at
+# redis://redis:6379/0 with USE_FAKEREDIS=false.
+#
+# Note `env_file: .env` -- copy .env.example to .env first, or compose fails
+# before it starts anything.
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      PROVIDER_BASE_URL: http://mock:8081
+      REDIS_URL: redis://redis:6379/0
+      USE_FAKEREDIS: "false"
+    depends_on:
+      - mock
+      - redis
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080
+
+  mock:
+    build: .
+    ports:
+      - "8081:8081"
+    env_file:
+      - .env
+    command: uvicorn mock.server:app --host 0.0.0.0 --port 8081
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"

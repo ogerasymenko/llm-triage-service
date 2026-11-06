@@ -1,0 +1,6 @@
+Search results feel wrong for two-word queries
+
+Searching for "invoice export" returns mostly unrelated help articles. Single
+word queries seem fine. Not sure if this is a relevance tuning thing or an
+indexing problem. It has probably been like this for a while, nobody complained
+until now.

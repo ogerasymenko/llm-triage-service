@@ -1,0 +1,12 @@
+crash
+
+Traceback (most recent call last):
+  File "/srv/app/api/handlers.py", line 88, in dispatch
+    return await route(request)
+  File "/srv/app/api/checkout.py", line 142, in post
+    total = compute_total(basket)
+  File "/srv/app/billing/totals.py", line 31, in compute_total
+    return sum(line.price * line.qty for line in basket.lines)
+TypeError: unsupported operand type(s) for *: 'NoneType' and 'int'
+
+happens on checkout. sometimes. dup of BUG-4471 maybe

@@ -1,0 +1,140 @@
+# Golden set: 10 inputs and the answers we are willing to accept.
+#
+# GIVEN, except the threshold, which is yours to set in stage 4.
+#
+# Why a *set* of accepted answers rather than one: this grades a probabilistic
+# system. Two competent triagers reading sample 05 will disagree about whether
+# a bad two-word search result is a `search` problem or a `payments` one, and
+# a golden set that admits only one of them measures agreement with its author,
+# not quality. So each entry lists every component a careful reader could
+# defend, and severity is graded by distance on the ordered scale rather than
+# by exact match -- calling a `high` bug `critical` is a much smaller error
+# than calling it `trivial`.
+#
+# The three unambiguous samples are the ones that must always be right; the
+# borderline and noisy ones are where the threshold lives.
+
+# TODO (stage 4): commit a threshold -- the fraction of the ten inputs that must
+# score as accepted. Set it by measuring, not by taste: `make golden` scores the
+# set on many seeds, `make golden MODE=bad_content` does the same for
+# confidently-wrong output. One seed is one sample of a spread; pick a bar the
+# worst clean seed clears and the best bad_content seed does NOT. If your
+# threshold passes under bad_content, it is measuring nothing. Committing it
+# here rather than in the test makes moving the bar a reviewable change.
+threshold: null
+severity_tolerance: 1     # how many steps on the severity scale we forgive
+
+severity_scale: [trivial, low, medium, high, critical]
+
+cases:
+  - id: "01"
+    file: 01_auth_500_unambiguous.txt
+    kind: unambiguous
+    accept:
+      component: [auth]
+      severity: [critical, high]
+      min_confidence: 0.6
+    note: >
+      Total sign-in outage in production. Everyone should get this one right;
+      if component is not auth the extraction is broken, not merely uncertain.
+
+  - id: "02"
+    file: 02_payments_refund_unambiguous.txt
+    kind: unambiguous
+    accept:
+      component: [payments]
+      severity: [critical, high, medium]
+      min_confidence: 0.5
+    note: >
+      Double refund is unambiguously payments. Severity is arguable -- money
+      moves the wrong way, but only on a retry race -- so the band is wide.
+
+  - id: "03"
+    file: 03_ui_modal_unambiguous.txt
+    kind: unambiguous
+    accept:
+      component: [ui]
+      severity: [low, trivial, medium]
+      min_confidence: 0.5
+    note: >
+      A cosmetic misalignment. The interesting failure here is a model that
+      calls a 40px offset "high" -- severity calibration, not component.
+
+  - id: "04"
+    file: 04_db_deadlock_borderline.txt
+    kind: borderline
+    accept:
+      component: [database, api]
+      severity: [medium, high, low]
+      min_confidence: 0.3
+    note: >
+      Reads like a deadlock, but the reporter is guessing and says so. Low
+      confidence is the correct response to a hedged report.
+
+  - id: "05"
+    file: 05_search_relevance_borderline.txt
+    kind: borderline
+    accept:
+      component: [search, payments, api, unknown]
+      severity: [low, medium, trivial]
+      min_confidence: 0.2
+    note: >
+      Genuinely ambiguous: "invoice export" is the query text, not necessarily
+      the subsystem. A reader who says payments is not wrong, which is exactly
+      why this case accepts several answers.
+
+  - id: "06"
+    file: 06_notifications_delay_borderline.txt
+    kind: borderline
+    accept:
+      component: [notifications, api]
+      severity: [medium, low, high]
+      min_confidence: 0.2
+    note: Intermittent, unreproducible, reporter unsure of their own evidence.
+
+  - id: "07"
+    file: 07_storage_upload_borderline.txt
+    kind: borderline
+    accept:
+      component: [storage, ui, api]
+      severity: [medium, high, low]
+      min_confidence: 0.2
+    note: >
+      Symptom is in the browser, cause is probably in storage. Both readings
+      are defensible from the text alone.
+
+  - id: "08"
+    file: 08_mixed_log_noisy.txt
+    kind: noisy
+    accept:
+      component: [database, api, unknown]
+      severity: [high, critical, medium]
+      min_confidence: 0.2
+    note: >
+      Chatty and hedged, but the pasted OperationalError is real evidence. A
+      good extraction finds the signal under the "idk".
+
+  - id: "09"
+    file: 09_stacktrace_noisy.txt
+    kind: noisy
+    accept:
+      component: [payments, api, unknown]
+      severity: [high, critical, medium]
+      min_confidence: 0.2
+      duplicate_of: ["BUG-4471", null]
+    note: >
+      One word of prose and a traceback. Also the only case carrying a
+      duplicate marker, so it is where duplicate_of extraction is graded.
+
+  - id: "10"
+    file: 10_short_noisy.txt
+    kind: noisy
+    accept:
+      component: [ui, unknown]
+      severity: [medium, low, high, trivial]
+      min_confidence: 0.0
+      max_confidence: 0.7
+    note: >
+      Four words with no repro, no component and no severity signal. The right
+      answer is a guess held loosely -- so this case caps confidence instead of
+      requiring a floor. High confidence here is the failure.

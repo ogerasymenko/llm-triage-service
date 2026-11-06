@@ -1,0 +1,8 @@
+Occasional slow order page, maybe the database?
+
+The order page sometimes takes 8-10 seconds instead of the usual 400ms. It
+seems to happen more in the evening. Someone mentioned a deadlock in the orders
+table migration but I'm not sure that's related. The postgres connection pool
+graph looks spiky around the same time.
+
+No error is shown to the user, the page just hangs and then completes.

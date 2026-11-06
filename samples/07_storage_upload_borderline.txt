@@ -1,0 +1,6 @@
+Large file upload fails without a clear error
+
+Uploading a file over roughly 100MB to the attachment bucket fails. The
+progress bar reaches the end and then the screen shows a generic "something
+went wrong". Smaller files upload fine. Possibly an S3 disk or bucket issue but
+I cannot tell from the client side. Sometimes it works on a second try.

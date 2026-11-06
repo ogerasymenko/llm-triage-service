@@ -1,0 +1,5 @@
+Email notifications arrive late, sometimes
+
+Users report that comment notification emails arrive anywhere between instantly
+and about 20 minutes later. It is intermittent and I could not reproduce it on
+demand. The webhook logs look normal to me but I may be reading them wrong.

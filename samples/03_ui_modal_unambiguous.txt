@@ -1,0 +1,11 @@
+Settings modal is misaligned on the dashboard at 1280px
+
+The settings modal renders about 40px left of centre. Purely cosmetic; every
+control still works. A minor visual polish issue with no functional impact.
+
+1. Open the dashboard
+2. Click the gear icon
+3. Observe the modal position at a 1280px viewport width
+
+Expected: the modal is centred on screen.
+Actual: it sits slightly left of centre. Nit, low priority.

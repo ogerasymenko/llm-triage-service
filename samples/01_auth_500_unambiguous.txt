@@ -1,0 +1,12 @@
+Login returns HTTP 500 for all users after the 4.2.1 deploy
+
+Since the deploy at 09:15 UTC nobody can sign in. Every attempt returns a 500
+from the auth service.
+
+1. Open the sign-in page
+2. Enter valid credentials for any account
+3. Click "Log in"
+
+Expected: redirected to the dashboard.
+Actual: a 500 error page. Traceback shows a KeyError on 'session_token' in the
+session handler. Affects all users in production.

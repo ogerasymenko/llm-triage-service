@@ -1,0 +1,10 @@
+Refunds are charged twice when the customer retries the refund button
+
+1. Open an order with a completed payment
+2. Press "Refund" and wait for the spinner
+3. Press "Refund" a second time before the page updates
+
+Expected: one refund.
+Actual: two refunds are issued against the same charge. The payments ledger
+shows two entries with different ids for one order. Reproduced on staging four
+times out of four.
