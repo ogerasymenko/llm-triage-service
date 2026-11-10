@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Un-ignore repo deliverables excluded by ~/.gitignore_global
+!Makefile
+!scripts/
