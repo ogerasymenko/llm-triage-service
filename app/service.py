@@ -4,6 +4,9 @@ The order is the lesson. From outside in:
 
     idempotency  ->  spend ceiling  ->  breaker + retry  ->  semaphore  ->  SDK
 
+When the primary is down (retries exhausted or breaker open) the same stack runs
+again around the fallback provider, with a breaker of its own.
+
   * Idempotency outermost. A cached result must cost nothing: no permit, no
     budget, no upstream call. Put it inside the semaphore and a burst of
     duplicate retries queues up to be told something we already knew.
@@ -33,11 +36,11 @@ from app.providers.base import Provider
 from app.reliability.breaker import CircuitBreaker, CircuitOpenError
 from app.reliability.idempotency import IdempotencyStore, build_redis, make_key
 from app.reliability.limits import Limits, SpendCeilingExceeded
-from app.reliability.retry import RetryPolicy, with_retry
+from app.reliability.retry import RetryExhaustedError, RetryPolicy, with_retry
 from app.schema import StreamEvent, TriageResult
 
 
-def build_provider(settings: Settings) -> Provider:
+def build_provider(settings: Settings, dialect: str | None = None) -> Provider:
     """The one place a dialect name becomes a concrete adapter.
 
     Imports are local so a process imports only the SDK of the dialect it is
@@ -48,7 +51,7 @@ def build_provider(settings: Settings) -> Provider:
     this function. Everything from the semaphore upward is written against the
     Provider Protocol, so adding a dialect costs one adapter and one line here.
     """
-    if settings.provider == "openai":
+    if (dialect or settings.provider) == "openai":
         from app.providers.openai_p import OpenAIProvider
 
         return OpenAIProvider(settings)
@@ -68,12 +71,21 @@ class TriageService:
         store: IdempotencyStore | None = None,
         limits: Limits | None = None,
         breaker: CircuitBreaker | None = None,
+        fallback: Provider | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.provider = provider or build_provider(self.settings)
         self.store = store or IdempotencyStore(build_redis(self.settings))
         self.limits = limits or Limits.from_settings(self.settings)
         self.breaker = breaker or CircuitBreaker(name="anthropic")
+        if fallback is None and self.settings.fallback_provider:
+            fallback = build_provider(self.settings, self.settings.fallback_provider)
+        self.fallback = fallback
+        # Its own breaker: the fallback's health is a separate fact. Sharing the
+        # primary's would open it on the primary's failures and cut off the very
+        # provider we are falling back to.
+        self.fallback_breaker = CircuitBreaker(name="fallback")
+        self.fallbacks_served = 0
         self.policy = RetryPolicy(max_retries=self.settings.max_retries)
         # Salts the cache key with the settings that change the answer, so a
         # run at a different temperature or model does not serve the previous
@@ -94,8 +106,33 @@ class TriageService:
         )
 
     async def _attempt_with_limits(self, text: str, idem_key: str | None) -> TriageResult:
-        """One logical request: budget, breaker+retry, semaphore, upstream."""
+        """One logical request: the primary with its retries, then the fallback.
 
+        Only an outage switches vendors: retries exhausted, or the breaker
+        already open. A permanent error (a refusal, output that will not
+        validate) propagates untouched -- it is the request's problem, and the
+        other vendor would refuse it too.
+        """
+        try:
+            return await with_retry(
+                self._attempt_via(self.provider, text, idem_key),
+                policy=self.policy,
+                breaker=self.breaker,
+            )
+        except (RetryExhaustedError, CircuitOpenError):
+            if self.fallback is None:
+                raise
+        self.fallbacks_served += 1
+        # Same layers around the fallback: every attempt is reserved against the
+        # ceiling and takes a permit and a rate slot, so the second vendor is
+        # not a way around any limit.
+        return await with_retry(
+            self._attempt_via(self.fallback, text, idem_key),
+            policy=self.policy,
+            breaker=self.fallback_breaker,
+        )
+
+    def _attempt_via(self, provider: Provider, text: str, idem_key: str | None):
         async def one_attempt() -> TriageResult:
             # Reserve worst-case budget BEFORE the call. Raises rather than
             # reporting an overrun after the fact.
@@ -104,7 +141,7 @@ class TriageService:
             try:
                 async with self.limits.limiter():
                     await self._rate_slot()
-                    result, in_tok, out_tok = await self.provider.extract_with_usage(
+                    result, in_tok, out_tok = await provider.extract_with_usage(
                         text, idem_key=idem_key
                     )
                 await self.limits.ledger.settle(reserved, in_tok, out_tok)
@@ -114,7 +151,7 @@ class TriageService:
                 if not settled:
                     await self.limits.ledger.release(reserved)
 
-        return await with_retry(one_attempt, policy=self.policy, breaker=self.breaker)
+        return one_attempt
 
     # --- streaming --------------------------------------------------------
 
@@ -126,22 +163,38 @@ class TriageService:
         different answer mid-response. A truncated stream surfaces as an
         `error` event, which is what `test_stream.py` asserts.
 
-        Not charged against the spend ceiling: the stream does not report its
-        token usage, so there is nothing to reserve or settle. A known gap, not
-        an oversight -- README's "Known gaps" says what closing it would take.
+        Charged against the spend ceiling like a unary call, but once: no
+        retry means one reservation. The worst case is reserved before anything
+        is sent (so the refusal raises on the first iteration, before the
+        provider is touched), settled from the usage the `done` event carries,
+        and released if the stream ends any other way -- an error event, an
+        exception, or the client walking away mid-stream.
 
         The caller is expected to have run `breaker.before_call()` already --
         the route does, so it can answer 503 with a real status code before any
         bytes go out. Once a StreamingResponse has started there is no status
         code left to change.
         """
-        async with self.limits.limiter():
-            await self._rate_slot()
-            upstream_failed = False
-            async for event in self.provider.stream(text):
-                if event.type == "error" and event.transient is not False:
-                    upstream_failed = True
-                yield event
+        reserved = await self.limits.ledger.reserve()
+        settled = False
+        upstream_failed = False
+        try:
+            async with self.limits.limiter():
+                await self._rate_slot()
+                async for event in self.provider.stream(text):
+                    if event.type == "error" and event.transient is not False:
+                        upstream_failed = True
+                    if event.type == "done" and not settled:
+                        # Settle before yielding: a consumer that stops reading
+                        # right after `done` must not leave the reservation held.
+                        await self.limits.ledger.settle(
+                            reserved, event.input_tokens or 0, event.output_tokens or 0
+                        )
+                        settled = True
+                    yield event
+        finally:
+            if not settled:
+                await self.limits.ledger.release(reserved)
         # A permanent error still counts as success here: upstream answered,
         # and it was the request that could not be served. Only a transient
         # error is evidence that upstream is sick.
@@ -156,3 +209,5 @@ class TriageService:
 
     async def aclose(self) -> None:
         await self.provider.aclose()
+        if self.fallback is not None:
+            await self.fallback.aclose()

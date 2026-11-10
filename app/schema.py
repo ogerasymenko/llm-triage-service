@@ -9,6 +9,27 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Severity = Literal["trivial", "low", "medium", "high", "critical"]
 
+# A schema checks shape, not words: left as a free string, a real model answered
+# "authentication" where the golden set says "auth". Declaring the vocabulary as
+# a Literal puts an enum in the wire schema (the model picks from the list) and
+# makes pydantic reject anything else (so a stray word fails loudly, not silently).
+COMPONENTS = (
+    "auth",
+    "payments",
+    "database",
+    "api",
+    "ui",
+    "search",
+    "notifications",
+    "storage",
+    "unknown",
+)
+
+Component = Literal[
+    "auth", "payments", "database", "api", "ui",
+    "search", "notifications", "storage", "unknown",
+]
+
 
 class TriageResult(BaseModel):
     """extra="forbid" is deliberate: a field the model invents is a bug, not a
@@ -17,7 +38,7 @@ class TriageResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     severity: Severity
-    component: str
+    component: Component
     duplicate_of: str | None = None
     steps: list[str] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
@@ -44,6 +65,11 @@ class StreamEvent(BaseModel):
     # read as transient, so an adapter that forgets to say keeps the old,
     # cautious behaviour rather than silently disabling the breaker.
     transient: bool | None = None
+    # On a `done` event: what the stream cost, so the spend ledger can settle
+    # it. Only known once the stream ends, which is why it rides on the last
+    # event rather than the first.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class TriageRequest(BaseModel):

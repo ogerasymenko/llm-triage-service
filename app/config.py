@@ -78,6 +78,10 @@ class Settings:
     # Set-but-empty means "no base URL" -> the SDK's own default -> the real
     # API. Only an unset variable falls back to the mock, so clearing the value
     # does what the participant plainly meant rather than silently staying local.
+    # Dialect to answer from when the primary is down; empty means no fallback.
+    # It shares PROVIDER_BASE_URL and each vendor keeps its own key, so with the
+    # default mock both dialects are reachable with no extra setup.
+    fallback_provider: str = field(default_factory=lambda: _str("FALLBACK_PROVIDER", ""))
     provider_base_url: str = field(
         default_factory=lambda: os.environ.get("PROVIDER_BASE_URL", "http://localhost:8081")
     )
@@ -138,6 +142,11 @@ class Settings:
                 f"PROVIDER must be one of {sorted(PROVIDERS)}, got {self.provider!r}. "
                 "It names the dialect, not a Python class; PROVIDER_BASE_URL still "
                 "chooses the transport."
+            )
+        if self.fallback_provider and self.fallback_provider not in PROVIDERS:
+            raise ValueError(
+                f"FALLBACK_PROVIDER must be one of {sorted(PROVIDERS)} or empty, "
+                f"got {self.fallback_provider!r}."
             )
         if self.targets_real_api and not self.allow_real_api:
             # A base URL is a legitimate configuration — it is how the mock is

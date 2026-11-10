@@ -239,4 +239,10 @@ class OpenAIProvider:
         except Exception as exc:
             yield StreamEvent(type="error", error=str(exc), transient=False)
             return
-        yield StreamEvent(type="done", result=result)
+        usage = final.usage
+        yield StreamEvent(
+            type="done",
+            result=result,
+            input_tokens=usage.prompt_tokens if usage else None,
+            output_tokens=usage.completion_tokens if usage else None,
+        )

@@ -126,6 +126,9 @@ async def limits(request: Request) -> dict:
         "max_retries": service.policy.max_retries,
         "breaker_state": service.breaker.state,
         "breaker_consecutive_failures": service.breaker.consecutive_failures,
+        "fallback_provider": type(service.fallback).__name__ if service.fallback else None,
+        "fallback_breaker_state": service.fallback_breaker.state if service.fallback else None,
+        "fallbacks_served": service.fallbacks_served,
     }
 
 
@@ -199,6 +202,13 @@ async def triage(
     )
 
 
+async def _chain(first, rest):
+    if first is not None:
+        yield first
+    async for event in rest:
+        yield event
+
+
 @router.post("/triage/stream", tags=["triage"])
 async def triage_stream(request: Request, body: TriageRequest):
     """Stream the triage result as server-sent events.
@@ -219,9 +229,20 @@ async def triage_stream(request: Request, body: TriageRequest):
             headers={"retry-after": str(int(max(1, exc.retry_after)))},
         )
 
+    # Pull the first event before committing to a 200: the spend ceiling is
+    # checked on it, and once a StreamingResponse starts there is no status
+    # code left to change.
+    events = service.triage_stream(body.text)
+    try:
+        first = await events.__anext__()
+    except SpendCeilingExceeded as exc:
+        return _error(402, "spend_ceiling_exceeded", str(exc))
+    except StopAsyncIteration:
+        first = None
+
     async def body_iter():
         try:
-            async for event in service.triage_stream(body.text):
+            async for event in _chain(first, events):
                 payload = json.loads(event.model_dump_json(exclude_none=True))
                 yield f"event: {event.type}\ndata: {json.dumps(payload)}\n\n".encode()
         except Exception as exc:  # a failure after headers went out
