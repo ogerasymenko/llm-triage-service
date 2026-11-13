@@ -142,3 +142,62 @@ async def test_limits_endpoint_reports_the_configuration(app_client, env):
     assert body["max_concurrency"] == 4
     assert body["max_retries"] == 3
     assert body["breaker_state"] == "closed"
+
+
+async def test_limits_reports_no_fallback_when_none_is_configured(app_client, env):
+    env(FAULT_RATE="0.0", TEMPERATURE="0.7")
+    client, _ = app_client
+    body = (await client.get("/limits")).json()
+    assert body["fallback_provider"] is None
+    assert body["fallback_breaker_state"] is None
+    assert body["fallbacks_served"] == 0
+
+
+async def test_limits_counts_only_fallbacks_that_answered(app_client, env):
+    from app.config import get_settings
+    from app.providers.base import TransientProviderError
+    from app.service import build_provider
+
+    class Down:
+        async def extract_with_usage(self, text, *, idem_key=None):
+            raise TransientProviderError("down")
+
+        async def aclose(self):
+            return None
+
+    env(FAULT_RATE="0.0", TEMPERATURE="0.7", MAX_RETRIES="0")
+    client, service = app_client
+    service.provider = Down()
+    # The fixture built the service before env() ran, so attach the fallback
+    # the way the FALLBACK_PROVIDER setting would have.
+    service.fallback = build_provider(get_settings(), "openai")
+    body = (await client.get("/limits")).json()
+    assert body["fallback_provider"] == "OpenAIProvider"
+    assert body["fallback_breaker_state"] == "closed"
+
+    assert (await client.post("/triage", json={"text": SAMPLE_TEXT})).status_code == 200
+    assert (await client.get("/limits")).json()["fallbacks_served"] == 1
+
+    service.fallback = Down()  # both vendors down: nobody was served
+    other = {"text": SAMPLE_TEXT + " (different request)"}
+    assert (await client.post("/triage", json=other)).status_code == 503
+    assert (await client.get("/limits")).json()["fallbacks_served"] == 1
+
+
+async def test_stream_uses_the_fallback_when_the_primary_breaker_is_open(app_client, env):
+    from app.config import get_settings
+    from app.service import build_provider
+
+    env(FAULT_RATE="0.0", TEMPERATURE="0.7")
+    client, service = app_client
+    service.fallback = build_provider(get_settings(), "openai")
+    for _ in range(service.breaker.failure_threshold):
+        await service.breaker.record_failure()
+    assert service.breaker.state == "open"
+
+    async with client.stream("POST", "/triage/stream", json={"text": SAMPLE_TEXT}) as response:
+        body = "".join([chunk async for chunk in response.aiter_text()])
+
+    assert response.status_code == 200
+    assert "event: done" in body
+    assert service.fallbacks_served == 1

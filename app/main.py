@@ -219,8 +219,17 @@ async def triage_stream(request: Request, body: TriageRequest):
     """
     service = get_service(request)
 
+    use_fallback = False
     try:
-        await service.breaker.before_call()
+        try:
+            await service.breaker.before_call()
+        except CircuitOpenError:
+            if service.fallback is None:
+                raise
+            # Nothing has been sent yet, so this is the one moment a stream can
+            # change vendor without replaying a different answer mid-response.
+            use_fallback = True
+            await service.fallback_breaker.before_call()
     except CircuitOpenError as exc:
         return _error(
             503,
@@ -232,7 +241,7 @@ async def triage_stream(request: Request, body: TriageRequest):
     # Pull the first event before committing to a 200: the spend ceiling is
     # checked on it, and once a StreamingResponse starts there is no status
     # code left to change.
-    events = service.triage_stream(body.text)
+    events = service.triage_stream(body.text, use_fallback=use_fallback)
     try:
         first = await events.__anext__()
     except SpendCeilingExceeded as exc:

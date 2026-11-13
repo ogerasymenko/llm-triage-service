@@ -3,7 +3,7 @@ changing it changes the goalposts."""
 
 from __future__ import annotations
 
-from typing import AsyncIterator, Literal, Protocol
+from typing import AsyncIterator, Literal, Protocol, get_args
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,22 +13,12 @@ Severity = Literal["trivial", "low", "medium", "high", "critical"]
 # "authentication" where the golden set says "auth". Declaring the vocabulary as
 # a Literal puts an enum in the wire schema (the model picks from the list) and
 # makes pydantic reject anything else (so a stray word fails loudly, not silently).
-COMPONENTS = (
-    "auth",
-    "payments",
-    "database",
-    "api",
-    "ui",
-    "search",
-    "notifications",
-    "storage",
-    "unknown",
-)
-
 Component = Literal[
     "auth", "payments", "database", "api", "ui",
     "search", "notifications", "storage", "unknown",
 ]
+# Derived, so the Literal stays the only place the names are written.
+COMPONENTS: tuple[str, ...] = get_args(Component)
 
 
 class TriageResult(BaseModel):

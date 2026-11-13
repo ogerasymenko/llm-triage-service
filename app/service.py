@@ -122,15 +122,17 @@ class TriageService:
         except (RetryExhaustedError, CircuitOpenError):
             if self.fallback is None:
                 raise
-        self.fallbacks_served += 1
         # Same layers around the fallback: every attempt is reserved against the
         # ceiling and takes a permit and a rate slot, so the second vendor is
         # not a way around any limit.
-        return await with_retry(
+        result = await with_retry(
             self._attempt_via(self.fallback, text, idem_key),
             policy=self.policy,
             breaker=self.fallback_breaker,
         )
+        # Counted on success only: a fallback that failed too served nobody.
+        self.fallbacks_served += 1
+        return result
 
     def _attempt_via(self, provider: Provider, text: str, idem_key: str | None):
         async def one_attempt() -> TriageResult:
@@ -155,7 +157,9 @@ class TriageService:
 
     # --- streaming --------------------------------------------------------
 
-    async def triage_stream(self, text: str) -> AsyncIterator[StreamEvent]:
+    async def triage_stream(
+        self, text: str, *, use_fallback: bool = False
+    ) -> AsyncIterator[StreamEvent]:
         """Stream a triage result.
 
         No retry and no cache on this path: a stream has already started
@@ -173,15 +177,22 @@ class TriageService:
         The caller is expected to have run `breaker.before_call()` already --
         the route does, so it can answer 503 with a real status code before any
         bytes go out. Once a StreamingResponse has started there is no status
-        code left to change.
+        code left to change. The same moment is the only safe one to switch
+        vendors, so the route passes `use_fallback=True` when the primary's
+        breaker is open; a stream that fails after it started is not switched.
         """
+        provider, breaker = self.provider, self.breaker
+        if use_fallback:
+            if self.fallback is None:
+                raise ValueError("use_fallback=True but no fallback is configured")
+            provider, breaker = self.fallback, self.fallback_breaker
         reserved = await self.limits.ledger.reserve()
         settled = False
         upstream_failed = False
         try:
             async with self.limits.limiter():
                 await self._rate_slot()
-                async for event in self.provider.stream(text):
+                async for event in provider.stream(text):
                     if event.type == "error" and event.transient is not False:
                         upstream_failed = True
                     if event.type == "done" and not settled:
@@ -191,6 +202,8 @@ class TriageService:
                             reserved, event.input_tokens or 0, event.output_tokens or 0
                         )
                         settled = True
+                        if use_fallback:
+                            self.fallbacks_served += 1
                     yield event
         finally:
             if not settled:
@@ -199,9 +212,9 @@ class TriageService:
         # and it was the request that could not be served. Only a transient
         # error is evidence that upstream is sick.
         if upstream_failed:
-            await self.breaker.record_failure()
+            await breaker.record_failure()
         else:
-            await self.breaker.record_success()
+            await breaker.record_success()
 
     async def _rate_slot(self) -> None:
         if self.limits.rate is not None:
